@@ -21,6 +21,16 @@
  *  Starts the scheduler thread
  *
  *  @param thread       if not NULL the thread id is returned here, ignored otherwise
+ *
+ *  @return the result of thread creation
+ */
+int config_scheduler_start( pthread_t *thread);
+
+
+/**
+ *  Starts the scheduler thread
+ *
+ *  @param thread       if not NULL the thread id is returned here, ignored otherwise
  *  @param firewall_cmd the firewall command to execute via system()
  *
  *  @return the result of thread creation
@@ -36,6 +46,16 @@ int scheduler_start( pthread_t *thread, const char *firewall_cmd );
  *  @return 0 on success, error from decoding the data otherwise
  */
 int process_schedule_data( size_t len, uint8_t *data );
+
+/**
+ *  Sends in data to make a new schedule and replace any existing ones.
+ *
+ *  @param len  the length of the data in bytes
+ *  @param data the schedule msgpack data
+ *
+ *  @return 0 on success, error from decoding the data otherwise
+ */
+int process_config_data( size_t len, uint8_t *data );
 
 /**
  *  Retreives data generated the last time the scheduler was run.

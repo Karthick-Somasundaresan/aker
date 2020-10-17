@@ -36,6 +36,7 @@ extern "C" {
 #define SERVICE_AKER         "aker"
 #define APP_SCHEDULE         "schedule"
 #define APP_SCHEDULE_END     "now"
+#define APP_CONFIG           "config"
     
 
 /*----------------------------------------------------------------------------*/

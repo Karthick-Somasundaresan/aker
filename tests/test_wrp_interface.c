@@ -88,6 +88,17 @@ int process_update( const char *filename, const char *md5_file,
     return process_update_rv;
 }
 
+static int process_config_rv = 0;
+int process_config( const char *filename,
+                    void *payload, size_t payload_size )
+{
+    (void) filename;
+    (void) payload;
+    (void) payload_size;
+
+    return process_config_rv;
+}
+
 static size_t process_retrieve_now_rv = 0;
 size_t process_retrieve_now( uint8_t **data )
 {
@@ -756,6 +767,44 @@ void test_process_wrp()
             .r.u.crud.payload = NULL,
             .r.u.crud.payload_size = 0,
         },
+        {   // 16
+            .pack_status_msg_rv = 0,
+            .process_update_rv = 0,
+            .process_retrieve_now_rv = 0,
+            .process_schedule_data_rv = 0,
+            .read_file_from_disk_rv = 16,
+            .process_is_create_ok_rv = 0,
+            .process_delete_rv = 0,
+
+            .s.msg_type = WRP_MSG_TYPE__CREATE,
+            .s.u.crud.transaction_uuid = "c2bb1f16-09c8-11e7-93ae-92361f002671",
+            .s.u.crud.source = "fake-server",
+            .s.u.crud.dest = "mac:112233445566/aker/config",
+            .s.u.crud.partner_ids = NULL,
+            .s.u.crud.headers = NULL,
+            .s.u.crud.metadata = NULL,
+            .s.u.crud.include_spans = false,
+            .s.u.crud.spans.spans = NULL,
+            .s.u.crud.spans.count = 0,
+            .s.u.crud.path = "Some path",
+            .s.u.crud.payload = NULL,
+            .s.u.crud.payload_size = 0,
+
+            .r.msg_type = WRP_MSG_TYPE__CREATE,
+            .r.u.crud.transaction_uuid = "c2bb1f16-09c8-11e7-93ae-92361f002671",
+            .r.u.crud.source = "mac:112233445566/aker/config",
+            .r.u.crud.dest = "fake-server",
+            .r.u.crud.partner_ids = NULL,
+            .r.u.crud.headers = NULL,
+            .r.u.crud.metadata = NULL,
+            .r.u.crud.include_spans = false,
+            .r.u.crud.spans.spans = NULL,
+            .r.u.crud.spans.count = 0,
+            .r.u.crud.status = 201,
+            .r.u.crud.path = "Some path",
+            .r.u.crud.payload = NULL,
+            .r.u.crud.payload_size = 0,
+        }
     };
     size_t t_size = sizeof(tests)/sizeof(test_t);
     uint8_t i;

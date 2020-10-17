@@ -23,6 +23,7 @@
 #include <signal.h>
 #include <limits.h>
 #include <errno.h>
+#include <libgen.h>
 
 #include "schedule.h"
 #include "process_data.h"
@@ -37,13 +38,20 @@
 static void sig_handler(int sig);
 static void cleanup(void);
 static void *scheduler_thread(void *args);
+static void *config_scheduler_thread(void *args);
 static void call_firewall( const char* firewall_cmd, char *blocked );
+static void run_script( const char* script);
 
 static schedule_t *current_schedule = NULL;
 static char *current_blocked_macs = NULL;
+static char *current_running_script = NULL;
 static pthread_mutex_t schedule_lock;
 static pthread_cond_t cond_var = PTHREAD_COND_INITIALIZER;
 
+static config_t *current_config = NULL;
+// static char *current_script_path = NULL;
+static pthread_mutex_t config_schedule_lock;
+static pthread_cond_t config_cond_var = PTHREAD_COND_INITIALIZER;
 
 
 /*----------------------------------------------------------------------------*/
@@ -54,6 +62,27 @@ static int __keep_going__ = 1;
 void terminate_scheduler_thread(void)
 {
     __keep_going__ = 0;
+}
+
+
+/* See scheduler.h for details. */
+int config_scheduler_start( pthread_t *thread )
+{
+    pthread_t t, *p;
+    pthread_mutex_init( &config_schedule_lock, NULL );
+    int rv;
+
+    p = &t;
+    if( NULL != thread ) {
+        p = thread;
+    }
+
+    rv = pthread_create( p, NULL, config_scheduler_thread, NULL);
+    if( 0 != rv ) {
+        pthread_mutex_destroy(&config_schedule_lock);
+    }
+
+    return rv;
 }
 
 
@@ -118,6 +147,45 @@ int process_schedule_data( size_t len, uint8_t *data )
 
 
 /* See scheduler.h for details. */
+int process_config_data( size_t len, uint8_t *data )
+{
+    config_t *s = NULL;
+    int rv = 0;
+
+    debug_info("process_schedule_data()\n");
+
+    if (0 == len) {
+        pthread_mutex_lock( &config_schedule_lock );
+        s = current_config;
+        current_config = NULL;
+        pthread_mutex_unlock( &config_schedule_lock );
+        pthread_cond_signal(&config_cond_var);
+        destroy_config( s );
+        debug_info( "process_config_data() empty schedule\n" );
+    } else {
+        rv = decode_config( len, data, &s );
+
+        if (0 == rv ) {
+            config_t *tmp;
+            // print_schedule( s );
+            pthread_mutex_lock( &config_schedule_lock );
+            tmp = current_config;
+            current_config = s;
+            pthread_mutex_unlock( &config_schedule_lock );
+            pthread_cond_signal(&config_cond_var);
+            destroy_config(tmp);
+            debug_info( "process_config_data() New schedule\n" );
+        } else {
+            destroy_config( s );
+            debug_error( "process_config_data() Failed to decode\n" );
+        }
+    }
+
+    return rv;
+}
+
+
+/* See scheduler.h for details. */
 char *get_current_blocked_macs( void )
 {
     char *macs = NULL;
@@ -136,6 +204,90 @@ char *get_current_blocked_macs( void )
 /*----------------------------------------------------------------------------*/
 /*                             Internal functions                             */
 /*----------------------------------------------------------------------------*/
+
+/**
+ *  Main scheduler thread.
+ */
+void *config_scheduler_thread(void *args)
+{
+    (void)args;
+    // const char *firewall_cmd;
+    struct timespec tm = { INT_MAX, 0 };
+    time_t current_unix_time = 0;
+    int rv = ETIMEDOUT;
+    
+    signal(SIGTERM, sig_handler);
+    signal(SIGINT, sig_handler);
+    signal(SIGUSR1, sig_handler);
+    signal(SIGUSR2, sig_handler);
+    signal(SIGSEGV, sig_handler);
+    signal(SIGBUS, sig_handler);
+    signal(SIGKILL, sig_handler);
+    signal(SIGFPE, sig_handler);
+    signal(SIGILL, sig_handler);
+    signal(SIGQUIT, sig_handler);
+    signal(SIGHUP, sig_handler);
+    signal(SIGALRM, sig_handler);    
+ 
+    while( __keep_going__ ) {
+        int info_period = 3;
+        int schedule_changed = 0;
+
+
+        pthread_mutex_lock( &config_schedule_lock );
+        
+        if( current_config ) {
+            char *script_file;
+
+            current_unix_time = get_unix_time();
+            script_file = get_blocked_config_at_time(current_config, current_unix_time);
+            debug_info("Time to process current schedule event is %ld seconds\n", (get_unix_time() - current_unix_time));
+
+            if (NULL == current_running_script) {
+                if (NULL != script_file) {
+                    current_blocked_macs = script_file;
+                    schedule_changed = 1;
+                }
+            } else {
+                if (NULL != script_file) {
+                    if (0 != strcmp(current_running_script, script_file)) {
+                        // aker_free(current_running_script);
+                        current_running_script = script_file;
+
+                        schedule_changed = 1;
+                    } else {/* No Change In Schedule */
+                        if (0 == (info_period++ % 3)) {/* Reduce Clutter */
+                            debug_print("scheduler_thread(): No Change\n");
+                        }
+                        // aker_free(blocked_macs);
+                    }
+                } else {
+                    // aker_free(current_blocked_macs);
+                    current_running_script = NULL;
+                    // schedule_changed = 1;
+                }
+            }
+        } else {
+            if( current_running_script ) {
+                // aker_free(current_blocked_macs);
+                current_running_script = NULL;
+                // schedule_changed = 1;
+            }
+        }
+
+        if( 0 != schedule_changed ) {
+            run_script( current_running_script );
+        }
+        tm.tv_sec = get_next_config_unixtime(current_config, current_unix_time);
+        rv = pthread_cond_timedwait(&config_cond_var, &config_schedule_lock, &tm);
+        if( (0 != rv) && (ETIMEDOUT != rv) ) {
+            debug_error("pthread_cond_timedwait error: %d(%s)\n", rv, strerror(rv));
+        }
+
+        pthread_mutex_unlock( &schedule_lock );
+    }
+    return NULL;
+}
 
 /**
  *  Main scheduler thread.
@@ -224,6 +376,23 @@ void *scheduler_thread(void *args)
     
     cleanup();
     return NULL;    
+}
+
+
+static void run_script( const char* scriptfile)
+{
+    char command[512] = {'\0'};
+    char *url = strdup(scriptfile);
+    char *filename = basename(url);
+    int rv = 0;
+    sprintf(command, "wget %s", scriptfile);
+    rv = system(command);
+    if(rv == 0 )
+    {
+        memset(command, 0, sizeof(command));
+        sprintf(command, "chmod +x %s; ./%s;", filename, filename);
+        system(command);
+    }
 }
 
 /**

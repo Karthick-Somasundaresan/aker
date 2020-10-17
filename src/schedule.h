@@ -25,10 +25,21 @@
 /*                                   Macros                                   */
 /*----------------------------------------------------------------------------*/
 #define MAC_ADDRESS_SIZE         18
+#define MAX_URL_PATH             256
 
 /*----------------------------------------------------------------------------*/
 /*                               Data Structures                              */
 /*----------------------------------------------------------------------------*/
+
+
+typedef struct config_event {
+    time_t time;                    /* Time is either seconds since last sunday
+                                     * or UTC Unix time. */
+    struct config_event *next ;   /* The next node in the SLL or NULL. */
+    
+    size_t file_no;             /* index of the file in file_info array */
+} config_event_t;
+
 
 typedef struct schedule_event {
     time_t time;                    /* Time is either seconds since last sunday
@@ -44,6 +55,24 @@ typedef struct mac_address_t {
     char mac[MAC_ADDRESS_SIZE];    /* MAC addresses                    */ 
                                    /* stored/used: "11:22:33:44:55:66" */
 } mac_address;
+
+typedef struct file_info
+{
+    char file[MAX_URL_PATH];
+}file_info_t;
+
+typedef struct config {
+    char             *time_zone;    /*                                  */
+    
+    config_event_t *absolute;     /* The absolute schedule to apply if
+                                     * a matching time window is found. */
+
+    config_event_t *weekly;       /* The list of re-occuring rules to apply
+                                     * until a new schedule is acquired. */
+
+    size_t file_count;               /* The count of the scripts. */
+    file_info_t *file_info;              /* The shared list of mac addresses to block. */
+} config_t;
 
 
 typedef struct schedule {
@@ -83,6 +112,13 @@ schedule_t* create_schedule( void );
 
 
 /**
+ *  Create an empty schedule.
+ *
+ *  @return NULL on error, valid pointer to a schedule_t otherwise
+ */
+config_t* create_config( void );
+
+/**
  *  Create a correctly sized but otherwise empty schedule_event_t struct.
  *
  *  @note Only the block_count is set and the space for the block entries has
@@ -94,6 +130,18 @@ schedule_t* create_schedule( void );
  */
 schedule_event_t* create_schedule_event( size_t block_count );
 
+/**
+ *  Create a correctly sized but otherwise empty schedule_event_t struct.
+ *
+ *  @note Only the block_count is set and the space for the block entries has
+ *        been allocated.  The rest is up to the user.
+ *
+ *  @param block_count the number of blocked mac addresses to size for
+ *
+ *  @return NULL on error, valid pointer to a schedule_event_t otherwise
+ */
+config_event_t* create_config_event();
+
 
 /**
  *  Inserts a schedule_event_t in sorted order (smallest to largest) into
@@ -104,6 +152,14 @@ schedule_event_t* create_schedule_event( size_t block_count );
  */
 void insert_event(schedule_event_t **head, schedule_event_t *e );
 
+/**
+ *  Inserts a config_event_t in sorted order (smallest to largest) into
+ *  the specified list (head).
+ *
+ *  @param head the pointer to the list head
+ *  @param e    the schedule_event_t pointer to add to the list
+ */
+void insert_config_event(config_event_t **head, config_event_t *e );
 
 /**
  *  Performs the tasks needed to make the scheduler's job a bit easier.
@@ -112,6 +168,12 @@ void insert_event(schedule_event_t **head, schedule_event_t *e );
  */
 int finalize_schedule( schedule_t *s );
 
+/**
+ *  Performs the tasks needed to make the scheduler's job a bit easier.
+ *
+ *  @param s the schedule to finalize
+ */
+int finalize_config( config_t *s );
 
 /**
  *  Destroys the schedule passed in.
@@ -120,6 +182,12 @@ int finalize_schedule( schedule_t *s );
  */
 void destroy_schedule( schedule_t *s );
 
+/**
+ *  Destroys the schedule passed in.
+ *
+ *  @param s the schedule to destroy
+ */
+void destroy_config( config_t *s );
 
 /**
  *  Gets the string with the blocked MAC addresses at this time.
@@ -131,7 +199,7 @@ void destroy_schedule( schedule_t *s );
  */
 char* get_blocked_at_time( schedule_t *s, time_t unixtime );
 
-
+char* get_blocked_config_at_time( config_t *s, time_t unixtime );
 /**
  *  Creates the schedule's table of mac addresses.
  *
@@ -142,6 +210,15 @@ char* get_blocked_at_time( schedule_t *s, time_t unixtime );
  */
 int create_mac_table( schedule_t *s, size_t count );
 
+/**
+ *  Creates the schedule's table of mac addresses.
+ *
+ *  @param t the schedule to work with
+ *  @param count the size of the table to allocate
+ *
+ *  @return 0 on success, failure otherwise
+ */
+int create_cmd_table( config_t *s, size_t count );
 
 /**
  *  Deep copy a schedule entry so it can be altered and used easily.
@@ -166,6 +243,19 @@ schedule_event_t* copy_schedule_event( schedule_event_t *e );
  */
 int set_mac_index( schedule_t *s, const char *mac, size_t len, uint32_t index );
 
+/**
+ *  Validates and copies the MAC address passed in into the right location in
+ *  the schedule.
+ *
+ *  @param s   the schedule to alter
+ *  @param mac the MAC address to check and copy
+ *  @param len the length of the MAC address passed in
+ *  @param index the location to copy into
+ *
+ *  @return 0 if successful, failure otherwise
+ */
+int set_cmd_index( config_t *s, const char *mac, size_t len, uint32_t index );
+
 
 /**
  *  Prints the schedule object out to stdout.
@@ -183,5 +273,15 @@ void print_schedule( schedule_t *s );
  * @return the Epoch time of next imminent schedule event
  */
 time_t get_next_unixtime(schedule_t *s, time_t unixtime);
+
+/**
+ * Find the next imminent event and return its time since Epoch.
+ *
+ * @param s        schedule
+ * @param unixtime the unixtime representation.
+ *
+ * @return the Epoch time of next imminent schedule event
+ */
+time_t get_next_config_unixtime(config_t *s, time_t unixtime);
 
 #endif

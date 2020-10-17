@@ -26,7 +26,7 @@
 /*----------------------------------------------------------------------------*/
 /*                                   Macros                                   */
 /*----------------------------------------------------------------------------*/
-/* None */
+#define CONFIG_FILE "./aker_config_file"
 
 /*----------------------------------------------------------------------------*/
 /*                               Data Structures                              */
@@ -132,6 +132,15 @@ void process_crud(const char *data_file, const char *md5_file,
                     }
                 } else if( 0 == strcmp(APP_SCHEDULE_END, endpoint) ) {
                     crud_out->status = 405;
+                } else if (0 == strcmp(APP_CONFIG, endpoint) ) {
+                    printf("Received create config request from cloud\n");
+                    if( 0 == process_is_create_ok(CONFIG_FILE) ) {
+                        tmp = process_config(CONFIG_FILE,
+                                                crud_in->payload, crud_in->payload_size );
+                        crud_out->status = ((0 == tmp) ? 201 : 533);
+                    } else {
+                        crud_out->status = 409;
+                    }
                 }
                 break;
                 
@@ -143,6 +152,9 @@ void process_crud(const char *data_file, const char *md5_file,
                 } else if( 0 == strcmp(APP_SCHEDULE_END, endpoint) ) {
                     crud_out->status = 200;
                     crud_out->payload_size = process_retrieve_now((uint8_t**) &(crud_out->payload));
+                } else if (0 == strcmp(APP_CONFIG, endpoint) ) {
+                    printf("Received retrive config request from cloud\n");
+                    crud_out->status = 200;
                 }
 
                 if( 200 == crud_out->status ) {
@@ -161,6 +173,12 @@ void process_crud(const char *data_file, const char *md5_file,
                     crud_out->status = ((0 == tmp) ? 201 : 534);
                 } else if( 0 == strcmp(APP_SCHEDULE_END, endpoint) ) {
                     crud_out->status = 405;
+                } else if (0 == strcmp(APP_CONFIG, endpoint) ) {
+                    printf("Received update config request from cloud\n");
+                    crud_out->status = 200;
+                    tmp = process_config(CONFIG_FILE, crud_in->payload,
+                                            crud_in->payload_size );
+                    crud_out->status = ((0 == tmp) ? 201 : 534);
                 }
                 break;
 
@@ -172,6 +190,9 @@ void process_crud(const char *data_file, const char *md5_file,
                     }
                 } else if( 0 == strcmp(APP_SCHEDULE_END, endpoint) ) {
                     crud_out->status = 405;
+                } else if (0 == strcmp(APP_CONFIG, endpoint) ) {
+                    printf("Received delete config request from cloud\n");
+                    crud_out->status = 200;
                 }
                 break;
 

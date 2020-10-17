@@ -59,6 +59,18 @@ int process_is_create_ok( const char *filename );
  */
 int process_update( const char *filename, const char *md5_file,
                     void *payload, size_t payload_size );
+/**
+ * @brief Processes wrp CRUD message for Update.
+ *
+ * @param filename     to write data payload into
+ * @param md5_file     to write the MD5 checksum into
+ * @param payload      the data to consume
+ * @param payload_size the length of the data in bytes
+ *
+ * @return 0 if successful, error otherwise
+ */
+int process_config( const char *filename,
+                    void *payload, size_t payload_size );
 
 /**
  * @brief Returns list of the currently blocked MAC IDs through the wrp CRUD message.

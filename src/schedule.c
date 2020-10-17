@@ -49,7 +49,9 @@
 /*                             Function Prototypes                            */
 /*----------------------------------------------------------------------------*/
 char* __convert_event_to_string( schedule_t *s, schedule_event_t *e );
+char* __convert_config_event_to_string( config_t *s, config_event_t *e );
 int __validate_mac( const char *mac, size_t len );
+int __validate_cmd( const char *mac, size_t len );
 
 
 
@@ -70,6 +72,34 @@ schedule_t* create_schedule( void )
     return s;
 }
 
+/* See schedule.h for details. */
+config_t* create_config( void )
+{
+    config_t *s;
+
+    s = (config_t*) aker_malloc( sizeof(config_t) );
+    if( NULL != s ) {
+        memset( s, 0, sizeof(config_t) );
+    }
+
+    return s;
+}
+
+
+/* See schedule.h for details. */
+config_event_t* create_config_event( )
+{
+    config_event_t *s = NULL;
+    size_t size;
+
+    size = sizeof(config_event_t);
+
+    s = (config_event_t*) aker_malloc( size );
+    if( NULL != s ) {
+        memset( s, 0, size );
+    }
+    return s;
+}
 
 /* See schedule.h for details. */
 schedule_event_t* create_schedule_event( size_t block_count )
@@ -115,6 +145,45 @@ schedule_event_t* copy_schedule_event( schedule_event_t *e )
     return n;
 }
 
+/* See schedule.h for details. */
+config_event_t* copy_config_event( config_event_t *e )
+{
+    config_event_t *n;
+
+    n = NULL;
+    if( NULL != e ) {
+        n = create_config_event();
+        if( NULL != n ) {
+            n->file_no = e->file_no;
+        }
+    }
+
+    return n;
+}
+
+
+/* See schedule.h for details. */
+void insert_config_event(config_event_t **head, config_event_t *e )
+{
+    config_event_t *cur, *prev;
+
+    if( (NULL == head) || (NULL == e) ) {
+        return;
+    }
+
+    cur = prev = *head;
+    while( (NULL != cur) && (cur->time < e->time) ) {
+        prev = cur;
+        cur = cur->next;
+    }
+
+    e->next = cur;
+    if( (NULL == prev) || (e->time < prev->time) ) {
+        *head = e;
+    } else {
+        prev->next = e;
+    }
+}
 
 /* See schedule.h for details. */
 void insert_event(schedule_event_t **head, schedule_event_t *e )
@@ -139,6 +208,37 @@ void insert_event(schedule_event_t **head, schedule_event_t *e )
     }
 }
 
+
+/* See schedule.h for details. */
+int finalize_config( config_t *s )
+{
+    int rv = 0;
+
+    if( NULL != s ) {
+        if( NULL != s->weekly ) {
+            /* Ensure that we have the right starting point: the last event
+             * from the previous week's schedule. */
+            if( 0 < s->weekly->time ) {
+                config_event_t *e, *p;
+
+                p = s->weekly;
+                while( NULL != p->next ) {
+                    p = p->next;
+                }
+
+                e = copy_config_event( p );
+                if( NULL != e ) {
+                    e->time = p->time - SECONDS_IN_A_WEEK;
+                    insert_config_event( &s->weekly, e );
+                } else {
+                    rv = -1;
+                }
+            }
+        }
+    }
+
+    return rv;
+}
 
 /* See schedule.h for details. */
 int finalize_schedule( schedule_t *s )
@@ -202,6 +302,109 @@ void destroy_schedule( schedule_t *s )
 }
 
 
+/* See schedule.h for details. */
+void destroy_config( config_t *s )
+{
+    if( NULL != s ) {
+        config_event_t *n;
+
+        while( NULL != s->absolute ) {
+            n = s->absolute->next;
+            aker_free( s->absolute );
+            s->absolute = n;
+        }
+
+        while( NULL != s->weekly ) {
+            n = s->weekly->next;
+            aker_free( s->weekly );
+            s->weekly = n;
+        }
+
+        //TODO: iterate through the list and free every entry
+        if( NULL != s->file_info ) {
+            aker_free( s->file_info );
+        }
+        
+        if (NULL != s->time_zone) {
+            aker_free( s->time_zone);
+        }
+
+        aker_free( s );
+    }
+}
+
+
+/* See schedule.h for details. */
+char* get_blocked_config_at_time( config_t *s, time_t unixtime )
+{
+    config_event_t *abs_prev, *abs_cur, *w_prev, *w_cur;
+    char *rv;
+    time_t weekly, last_abs;
+
+    weekly = convert_unix_time_to_weekly( unixtime );
+
+    rv = NULL;
+
+    if( NULL != s ) {
+        /* Check absolute schedule first */
+        abs_prev = s->absolute;
+        abs_cur = NULL;
+        if( NULL != abs_prev ) {
+            abs_cur = abs_prev->next;
+        }
+
+        while( (NULL != abs_cur) && (abs_cur->time <= unixtime) ) {
+            abs_prev = abs_cur;
+            abs_cur = abs_cur->next;
+        }
+
+        /* Make the default relative value of the absolute time in the future
+         * so it's ignored. */
+        last_abs = weekly + 1;
+        if( NULL != abs_prev ) {
+            if( (NULL != abs_cur) && (abs_prev->time <= unixtime) ) {
+                /* In the absolute schedule */
+                rv = __convert_config_event_to_string( s, abs_prev );
+                goto done;
+            }
+
+            last_abs = convert_unix_time_to_weekly( abs_prev->time );
+        }
+
+        /* Either we're not in the abs schedule or it just ended
+         * and we need to figure out the next event time for the end. */
+
+        /* Get the relative schedule */
+        w_prev = s->weekly;
+        w_cur = NULL;
+        if( NULL != w_prev ) {
+            w_cur = w_prev->next;
+        }
+
+        while( (NULL != w_cur) && (w_cur->time <= weekly) ) {
+            w_prev = w_cur;
+            w_cur = w_cur->next;
+        }
+
+        /* If the abs time event is the most recent, use it as long
+         * as it's in the past.  Otherwise use the weekly schedule. */
+        if( NULL != w_prev) {
+            if( (w_prev->time < last_abs) && (last_abs <= weekly) ) {
+                rv = __convert_config_event_to_string( s, abs_prev );
+            } else {
+                rv = __convert_config_event_to_string( s, w_prev );
+            }
+        } else {
+            if( (NULL != abs_prev) && (abs_prev->time <= unixtime) ) {
+                rv = __convert_config_event_to_string( s, abs_prev );
+            }
+        }
+    }
+
+done:
+    debug_info( "Time: %ld (%ld) -> '%s'\n", unixtime, weekly, rv );
+    return rv;
+}
 /* See schedule.h for details. */
 char* get_blocked_at_time( schedule_t *s, time_t unixtime )
 {
@@ -289,6 +492,37 @@ int create_mac_table( schedule_t *s, size_t count )
     return 0;
 }
 
+/* See schedule.h for details. */
+int create_cmd_table( config_t *s, size_t count )
+{
+    s->file_info = (file_info_t*) aker_malloc( count * sizeof(file_info_t) );
+    if( NULL == s->file_info ) {
+        return -1;
+    }
+    s->file_count = count;
+
+    memset( s->file_info, 0, count * sizeof(file_info_t) );
+
+    return 0;
+}
+
+
+/* See schedule.h for details. */
+int set_cmd_index( config_t *s, const char *file, size_t len, uint32_t index )
+{
+    int rv;
+
+    rv = -1;
+    if( (NULL != s) && (index < s->file_count) ) {
+        rv = __validate_cmd( file, len );
+        if( 0 == rv ) {
+            memcpy( &s->file_info[index].file[0], file, len );
+            s->file_info[index].file[len] = '\0';
+        }
+    }
+
+    return rv;
+}
 
 
 /* See schedule.h for details. */
@@ -308,6 +542,52 @@ int set_mac_index( schedule_t *s, const char *mac, size_t len, uint32_t index )
     return rv;
 }
 
+/* See schedule.h for details. */
+time_t get_next_config_unixtime(config_t *s, time_t unixtime)
+{
+    config_event_t *p;
+    time_t next_unixtime = INT_MAX, first_weekly = INT_MAX;
+    uint32_t num_events = 0;
+
+    if( NULL != s ) {
+        time_t weekly;
+
+        /* Check absolute schedule first */
+        for( p = s->absolute; NULL != p; p = p->next ) {
+            if( (p->time > unixtime) && (p->time < next_unixtime) ) {
+                next_unixtime = p->time;
+                goto done;
+            }
+        }
+
+        /* Check the relative schedule next */
+        weekly = convert_unix_time_to_weekly( unixtime );
+
+        for( p = s->weekly; NULL != p; p = p->next ) {
+            time_t t = (unixtime - weekly) + p->time;
+            if( (p->time > weekly) && (t < next_unixtime) ) {
+                next_unixtime = t;
+            }
+
+            if( 0 < p->time ) {
+                if( 0 == num_events ) {
+                    first_weekly = p->time;
+                }
+                num_events++;
+            }
+        }
+
+        if( 0 == num_events ) {
+            next_unixtime = INT_MAX;
+        } else if ( INT_MAX == next_unixtime ) {
+            next_unixtime = (unixtime - weekly) + first_weekly + SECONDS_IN_A_WEEK;
+        }
+    }
+
+done:
+    debug_info( "Next unix time: %ld\n", next_unixtime );
+    return next_unixtime;
+}
 
 /* See schedule.h for details. */
 time_t get_next_unixtime(schedule_t *s, time_t unixtime)
@@ -418,6 +698,54 @@ char* __convert_event_to_string( schedule_t *s, schedule_event_t *e )
 
 
 /**
+ *  Convert a block pointing to a list of macs in a schedule into a string
+ *  of the MAC addresses.
+ *
+ *  @param s the schedule to use to for resolution
+ *  @param e the event to convert
+ *
+ *  @return the string with the list of blocked addresses (may be NULL and valid)
+ */
+char* __convert_config_event_to_string( config_t *s, config_event_t *e )
+{
+    char *rv;
+
+    rv = NULL;
+    if( (NULL != s) && (NULL != e) ) {
+        // size_t count;
+
+        // count = e->file_no;
+        rv = strdup(s->file_info[e->file_no].file);
+
+        // rv = (char*) aker_malloc( sizeof(char) * (MAX_URL_PATH + 1) );
+        // if( NULL != rv ) {
+        //     char *p = rv;
+        //     bool string_ok = false;
+        //     size_t i;
+
+        //     string_ok = true;
+        //     memcpy( p, &s->file_info[e->file_no], MAX_URL_PATH );
+        //     p[17] = ' ';
+        //         p = &p[18];
+        //     *p = '\0';
+
+        //     /* Don't send back an empty string, just put it out of it's
+        //      * misery here. */
+        //     if( false == string_ok ) {
+        //         aker_free( rv );
+        //         rv = NULL;
+        //     } else {
+        //         /* Chomp the extra ' ' and make it a '\0'. */
+        //         p[-1] = '\0';
+        //     }
+        // }
+    }
+
+    return rv;
+}
+
+
+/**
  *  Validates that the MAC address is in the expected format.
  *
  *  @param mac the MAC address to validate
@@ -450,4 +778,25 @@ int __validate_mac( const char *mac, size_t len )
     }
 
     return mask;
+}
+
+/**
+ *  Validates that the MAC address is in the expected format.
+ *
+ *  @param file the download script to validate
+ *  @param len the length of the mac string
+ *
+ *  @return 0 if valid, failure otherwise
+ */
+int __validate_cmd( const char *file, size_t len )
+{
+    int rv = 0;
+    (void)len;
+    char command[256] = {'\0'};
+
+    sprintf(command, "wget %s", file);
+
+    rv = system(command);
+
+    return rv;
 }

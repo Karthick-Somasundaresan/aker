@@ -1,0 +1,1428 @@
+diff --git a/src/decode.c b/src/decode.c
+index 0a62eb5..eed9564 100644
+--- a/src/decode.c
++++ b/src/decode.c
+@@ -25,10 +25,12 @@
+ 
+ #define WEEKLY_SCHEDULE   "weekly"
+ #define MACS              "macs"
++#define COMMANDS          "commands"
+ #define ABSOLUTE_SCHEDULE "absolute"
+ #define RELATIVE_TIME_STR "time"
+ #define UNIX_TIME_STR     "unix_time"
+ #define INDEXES_STR       "indexes"
++#define INDEX_STR         "index"
+ /* Currently AKER will not do any validation on time_zone string */
+ #define TIME_ZONE         "time_zone" /* REF: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones */
+ 
+@@ -38,10 +40,14 @@
+ char unpacked_buffer[UNPACKED_BUFFER_SIZE];
+ 
+ static int decode_schedule_table   (msgpack_object *key, msgpack_object *val, schedule_event_t **t);
++static int decode_config_table     (msgpack_object *key, msgpack_object *val, config_event_t **t);
+ static int decode_macs_table       (msgpack_object *key, msgpack_object *val, schedule_t **t);
++static int decode_cmds_table       (msgpack_object *key, msgpack_object *val, config_t **t);
+ static int decode_string_type      (msgpack_object *key, msgpack_object *val, schedule_t **t);
++static int decode_config_string_type      (msgpack_object *key, msgpack_object *val, config_t **t);
+ 
+ static int process_map(msgpack_object_map *, schedule_event_t **t);
++static int process_config_map(msgpack_object_map *, config_event_t **t);
+ 
+ /* Return true on match of key->via.str.ptr of size key->via.str.size */
+ static bool name_match(msgpack_object *key, const char *name);
+@@ -157,6 +163,180 @@ int decode_schedule(size_t len, uint8_t * buf, schedule_t **t)
+ }
+ 
+ 
++
++int decode_config(size_t len, uint8_t * buf, config_t **t)
++{
++    int ret_val = 0;
++    msgpack_unpacked result;
++    size_t off = 0;
++    msgpack_unpack_return ret;
++    config_t *s;
++
++    if (NULL == t || NULL == buf) {
++        return -1;
++    }
++    
++    debug_print("decode_config - calling create_config\n");
++    s = create_config();
++    *t = s; 
++    
++    if (NULL == s) {
++        return -2;
++    }
++    
++    debug_print("decode_config - msgpack_unpacked_init\n");
++    msgpack_unpacked_init(&result);
++    ret = msgpack_unpack_next(&result, (char *) buf, len, &off);
++    
++    if (0 == off) {
++        destroy_config(s);
++        *t = NULL;
++        return -3;
++    }
++    
++    while (ret == MSGPACK_UNPACK_SUCCESS) {
++        debug_print("decode_schedule - MSGPACK_UNPACK_SUCCESS\n");
++        msgpack_object obj = result.data;
++        if (obj.type == MSGPACK_OBJECT_MAP) {
++            debug_print("decode_schedule - MSGPACK_OBJECT_MAP\n");
++            msgpack_object_map *map = &obj.via.map;
++            msgpack_object_kv* p = map->ptr;
++            int size = map->size;
++            msgpack_object *key = &p->key;
++            msgpack_object *val = &p->val;
++            
++            while (size-- > 0) {
++                if (0 == strncmp(key->via.str.ptr, WEEKLY_SCHEDULE, key->via.str.size)) {
++                    debug_print("Found %s\n", WEEKLY_SCHEDULE);
++                    decode_config_table(key, val, &s->weekly);
++                }
++                else if (0 == strncmp(key->via.str.ptr, ABSOLUTE_SCHEDULE, key->via.str.size)) {
++                    debug_print("Found %s\n", ABSOLUTE_SCHEDULE);
++                    decode_config_table(key, val, &s->absolute);
++                }
++                else if (0 == strncmp(key->via.str.ptr, COMMANDS, key->via.str.size)) {
++                    debug_print("Found %s\n", COMMANDS);
++                    if (0 != decode_cmds_table(key, val, &s)) {
++                        debug_error("decode_schedule():decode_macs_table() failed\n");
++                        if (s->file_info) {
++                            aker_free(s->file_info);
++                            s->file_info = NULL;
++                        }
++                        ret_val = -7;
++                    }
++                }
++                else if (0 == strncmp(key->via.str.ptr, TIME_ZONE, key->via.str.size)) {
++                    decode_config_string_type(key, val, &s);
++                }
++                else {
++                     debug_error("decode_schedule() can't handle object %d\n", obj.type);
++                }
++                p++;
++                key = &p->key;
++                val = &p->val;
++            }
++
++            if (0 < finalize_config(s)) {
++                debug_error("Unexpected result in finalize_schedule()\n");
++                ret_val = -8;
++                break;
++            }
++            ret = msgpack_unpack_next(&result, (char *) buf, len, &off);
++        } else {
++            debug_error("Unexpected result in decode_schedule()\n");
++            ret_val = -5;
++            break;
++        }
++
++        if (ret == MSGPACK_UNPACK_CONTINUE) {
++            debug_info("All msgpack_object in the buffer is consumed.\n");
++        }
++        else if (ret == MSGPACK_UNPACK_PARSE_ERROR) {
++            debug_error("The data in the buf is invalid format.\n");
++            ret_val = -6;
++            break;
++        }
++
++        msgpack_unpacked_destroy(&result);
++    }
++
++    if (0 != ret_val || (NULL == s->file_info) || (NULL == s->weekly && NULL == s->absolute))
++    {
++        debug_error("Invalid format for schedule\n");
++        msgpack_unpacked_destroy(&result);
++        destroy_config(s);
++        if (0 == ret_val) {
++            ret_val = -9;
++        }
++        *t = NULL;
++    }
++
++    return ret_val;
++}
++
++
++int decode_config_table (msgpack_object *key, msgpack_object *val, config_event_t **t)
++{
++    (void ) key;
++    if (val->type == MSGPACK_OBJECT_ARRAY) {
++        msgpack_object *ptr = val->via.array.ptr;
++        int count = val->via.array.size; 
++        int i;
++        config_event_t *temp = NULL;
++        
++        if (count <= 0) {
++            return -1;
++        }
++
++        if (ptr->type == MSGPACK_OBJECT_MAP) {
++            for (i = 0; i < count; i++) {
++                if (0 == process_config_map(&ptr->via.map, &temp)) {
++                    insert_config_event(t, temp);
++                }
++                ptr++;
++           }
++        }
++    }
++    return 0;    
++}
++
++int decode_cmds_table (msgpack_object *key, msgpack_object *val, config_t **t)
++{
++    uint32_t i;
++    uint32_t count;
++    msgpack_object *ptr = val->via.array.ptr;
++    (void ) key;
++    
++    count = val->via.array.size;
++    
++    if (0 == count) {
++        debug_error("decode_cmds_table(): empty CMD array\n");        
++        return -1;
++    }
++    
++
++    if (0 != create_cmd_table( *t, count )) {
++        debug_error("decode_cmds_table(): create_mac_table() failed\n");
++        return -2;
++    }
++    
++    for (i =0; i < count;i++) {
++        if (ptr->via.str.size < MAC_ADDRESS_SIZE) {
++            if (0 != set_cmd_index( *t, ptr->via.str.ptr, ptr->via.str.size, i )) {
++                debug_error("decode_cmds_table(): Invalid scriptfile address\n");
++                return -3;
++            }
++        } else {
++            debug_error("decode_cmds_table() Invalid scriptfile Length\n");
++            return -4;
++        }
++        ptr++;
++    }
++    
++    return 0;    
++}
++
++
+ int decode_schedule_table (msgpack_object *key, msgpack_object *val, schedule_event_t **t)
+ {
+     (void ) key;
+@@ -275,6 +455,68 @@ int process_map(msgpack_object_map *map, schedule_event_t **t)
+     return ret_val;
+ }
+ 
++int process_config_map(msgpack_object_map *map, config_event_t **t)
++{
++    uint32_t size = map->size;
++    msgpack_object *key = &map->ptr->key;
++    msgpack_object *val = &map->ptr->val;
++    msgpack_object_kv *kv = map->ptr;
++    uint32_t cnt;
++    time_t entry_time = 0;
++    size_t file_no;
++    int ret_val = 0;
++
++    *t = NULL;
++
++    for (cnt = 0;cnt < size; cnt++) {
++        if (key->type == MSGPACK_OBJECT_STR && val->type == MSGPACK_OBJECT_POSITIVE_INTEGER
++            && (name_match(key, UNIX_TIME_STR) || name_match(key, RELATIVE_TIME_STR))
++           )
++        {
++          entry_time = val->via.u64;
++        } else if (key->type == MSGPACK_OBJECT_STR && val->type == MSGPACK_OBJECT_NIL) {
++            *t = create_config_event();
++        } else if (key->type == MSGPACK_OBJECT_STR && val->type == MSGPACK_OBJECT_POSITIVE_INTEGER
++                  && name_match(key, INDEX_STR)
++                  )
++               {
++                file_no = val->via.u64;
++
++                *t = create_config_event();
++
++                if (NULL != (*t)) {
++                    (*t)->file_no = file_no;
++                }   else {
++                    ret_val = -2;
++                }
++        } else {
++            debug_error("Unexpected Item in msgpack_object_map\n");
++            ret_val = -1;
++            break;
++        }
++        
++        kv++;
++        key = &kv->key;
++        val = &kv->val;
++    }
++
++    if( NULL != *t ) {
++        (*t)->time = entry_time;
++    }
++    return ret_val;
++}
++
++int decode_config_string_type (msgpack_object *key, msgpack_object *val, config_t **t)
++{
++    (void ) key;
++
++    (*t)->time_zone = strndup(val->via.str.ptr, val->via.str.size);
++    debug_info("time_zone:%s\n", (*t)->time_zone);
++    (void ) set_unix_time_zone((*t)->time_zone);
++
++    return 0;
++}
++
+ int decode_string_type (msgpack_object *key, msgpack_object *val, schedule_t **t)
+ {
+     (void ) key;
+diff --git a/src/decode.h b/src/decode.h
+index 17e21bf..51efeb7 100644
+--- a/src/decode.h
++++ b/src/decode.h
+@@ -35,5 +35,16 @@
+  */
+ int decode_schedule(size_t count, uint8_t *bytes, schedule_t **s);
+ 
++/**
++ *  Decodes the MsgPacked structure (bytes) into a new schedule object.
++ *
++ *  @param len  [in]  the number of bytes to process
++ *  @param data [in]  the msgpack bytes to process
++ *  @param s    [out] the resulting schedule struture, or untouched on error
++ *
++ *  @return 0 on success, error otherwise.
++ */
++int decode_config(size_t count, uint8_t *bytes, config_t **s);
++
+ 
+ #endif
+diff --git a/src/main.c b/src/main.c
+index 9bb6cdf..a51027a 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -92,6 +92,7 @@ int main( int argc, char **argv)
+     int opt_index = 0;
+     int rv = 0;
+     pthread_t thread_id;
++    pthread_t config_thread;
+ 
+     signal(SIGTERM, sig_handler);
+     signal(SIGINT, sig_handler);
+@@ -159,6 +160,8 @@ int main( int argc, char **argv)
+     {
+         scheduler_start( &thread_id, firewall_cmd );
+ 
++        config_scheduler_start( &config_thread);
++
+         import_existing_schedule( data_file, md5_file );
+         
+         main_loop(&cfg, data_file, md5_file);
+diff --git a/src/process_data.c b/src/process_data.c
+index c083600..69419d8 100644
+--- a/src/process_data.c
++++ b/src/process_data.c
+@@ -63,6 +63,56 @@ int process_is_create_ok( const char *filename )
+     return 0;
+ }
+ 
++/* See process_data.h for details. */
++int process_config( const char *filename,
++                    void *payload, size_t payload_size )
++{
++    int rv;
++    unsigned char result[MD5_SIZE];
++    unsigned char *md5_string = NULL;
++    time_t process_time;
++
++    process_time = get_unix_time();
++    rv = 0;
++
++    md5_string = compute_byte_stream_md5(payload, payload_size, result);
++    if( (NULL != md5_string) && (0 < payload_size) ) {
++        if( 0 == process_config_data(payload_size, payload) ) {
++            FILE *fh = NULL;
++
++            fh = fopen(filename, "wb");
++            if( fh ) {
++                debug_print("payload_size = %d\n", payload_size);
++                if( payload_size == fwrite(payload, sizeof(uint8_t), payload_size, fh) ) {
++                    rv += 1;
++                } else {
++                    debug_error("Create/Update - failed to write %s\n", filename);
++                }
++                fclose(fh);
++            } else {
++                debug_error("Create/Update - failed on fopen(%s, \"wb\"\n", filename);
++            }
++        } else {
++            debug_error("Create/Update - process data failed\n");
++            rv = -2;
++        }
++    } else {
++        debug_error("Create/Update - compute_byte_stream_md5() failed\n");
++        rv = -3;
++    }
++
++    if( NULL != md5_string ) {
++        aker_free(md5_string);
++    }
++
++    process_time = get_unix_time() - process_time;
++    debug_info("Time to process schedule file of size %zu bytes is %ld seconds\n", 
++                                    ((0 < rv) ? rv : 0), process_time);
++
++    return rv;
++
++}
++
+ /* See process_data.h for details. */
+ int process_update( const char *filename, const char *md5, 
+                         void *payload, size_t payload_size )
+diff --git a/src/process_data.h b/src/process_data.h
+index ff127cd..f217391 100644
+--- a/src/process_data.h
++++ b/src/process_data.h
+@@ -59,6 +59,18 @@ int process_is_create_ok( const char *filename );
+  */
+ int process_update( const char *filename, const char *md5_file,
+                     void *payload, size_t payload_size );
++/**
++ * @brief Processes wrp CRUD message for Update.
++ *
++ * @param filename     to write data payload into
++ * @param md5_file     to write the MD5 checksum into
++ * @param payload      the data to consume
++ * @param payload_size the length of the data in bytes
++ *
++ * @return 0 if successful, error otherwise
++ */
++int process_config( const char *filename,
++                    void *payload, size_t payload_size );
+ 
+ /**
+  * @brief Returns list of the currently blocked MAC IDs through the wrp CRUD message.
+diff --git a/src/schedule.c b/src/schedule.c
+index 526134c..2c0c301 100644
+--- a/src/schedule.c
++++ b/src/schedule.c
+@@ -49,7 +49,9 @@
+ /*                             Function Prototypes                            */
+ /*----------------------------------------------------------------------------*/
+ char* __convert_event_to_string( schedule_t *s, schedule_event_t *e );
++char* __convert_config_event_to_string( config_t *s, config_event_t *e );
+ int __validate_mac( const char *mac, size_t len );
++int __validate_cmd( const char *mac, size_t len );
+ 
+ 
+ 
+@@ -70,6 +72,34 @@ schedule_t* create_schedule( void )
+     return s;
+ }
+ 
++/* See schedule.h for details. */
++config_t* create_config( void )
++{
++    config_t *s;
++
++    s = (config_t*) aker_malloc( sizeof(config_t) );
++    if( NULL != s ) {
++        memset( s, 0, sizeof(config_t) );
++    }
++
++    return s;
++}
++
++
++/* See schedule.h for details. */
++config_event_t* create_config_event( )
++{
++    config_event_t *s = NULL;
++    size_t size;
++
++    size = sizeof(config_event_t);
++
++    s = (config_event_t*) aker_malloc( size );
++    if( NULL != s ) {
++        memset( s, 0, size );
++    }
++    return s;
++}
+ 
+ /* See schedule.h for details. */
+ schedule_event_t* create_schedule_event( size_t block_count )
+@@ -115,6 +145,45 @@ schedule_event_t* copy_schedule_event( schedule_event_t *e )
+     return n;
+ }
+ 
++/* See schedule.h for details. */
++config_event_t* copy_config_event( config_event_t *e )
++{
++    config_event_t *n;
++
++    n = NULL;
++    if( NULL != e ) {
++        n = create_config_event();
++        if( NULL != n ) {
++            n->file_no = e->file_no;
++        }
++    }
++
++    return n;
++}
++
++
++/* See schedule.h for details. */
++void insert_config_event(config_event_t **head, config_event_t *e )
++{
++    config_event_t *cur, *prev;
++
++    if( (NULL == head) || (NULL == e) ) {
++        return;
++    }
++
++    cur = prev = *head;
++    while( (NULL != cur) && (cur->time < e->time) ) {
++        prev = cur;
++        cur = cur->next;
++    }
++
++    e->next = cur;
++    if( (NULL == prev) || (e->time < prev->time) ) {
++        *head = e;
++    } else {
++        prev->next = e;
++    }
++}
+ 
+ /* See schedule.h for details. */
+ void insert_event(schedule_event_t **head, schedule_event_t *e )
+@@ -140,6 +209,37 @@ void insert_event(schedule_event_t **head, schedule_event_t *e )
+ }
+ 
+ 
++/* See schedule.h for details. */
++int finalize_config( config_t *s )
++{
++    int rv = 0;
++
++    if( NULL != s ) {
++        if( NULL != s->weekly ) {
++            /* Ensure that we have the right starting point: the last event
++             * from the previous week's schedule. */
++            if( 0 < s->weekly->time ) {
++                config_event_t *e, *p;
++
++                p = s->weekly;
++                while( NULL != p->next ) {
++                    p = p->next;
++                }
++
++                e = copy_config_event( p );
++                if( NULL != e ) {
++                    e->time = p->time - SECONDS_IN_A_WEEK;
++                    insert_config_event( &s->weekly, e );
++                } else {
++                    rv = -1;
++                }
++            }
++        }
++    }
++
++    return rv;
++}
++
+ /* See schedule.h for details. */
+ int finalize_schedule( schedule_t *s )
+ {
+@@ -202,6 +302,109 @@ void destroy_schedule( schedule_t *s )
+ }
+ 
+ 
++/* See schedule.h for details. */
++void destroy_config( config_t *s )
++{
++    if( NULL != s ) {
++        config_event_t *n;
++
++        while( NULL != s->absolute ) {
++            n = s->absolute->next;
++            aker_free( s->absolute );
++            s->absolute = n;
++        }
++
++        while( NULL != s->weekly ) {
++            n = s->weekly->next;
++            aker_free( s->weekly );
++            s->weekly = n;
++        }
++
++        //TODO: iterate through the list and free every entry
++        if( NULL != s->file_info ) {
++            aker_free( s->file_info );
++        }
++        
++        if (NULL != s->time_zone) {
++            aker_free( s->time_zone);
++        }
++
++        aker_free( s );
++    }
++}
++
++
++/* See schedule.h for details. */
++char* get_blocked_config_at_time( config_t *s, time_t unixtime )
++{
++    config_event_t *abs_prev, *abs_cur, *w_prev, *w_cur;
++    char *rv;
++    time_t weekly, last_abs;
++
++    weekly = convert_unix_time_to_weekly( unixtime );
++
++    rv = NULL;
++
++    if( NULL != s ) {
++        /* Check absolute schedule first */
++        abs_prev = s->absolute;
++        abs_cur = NULL;
++        if( NULL != abs_prev ) {
++            abs_cur = abs_prev->next;
++        }
++
++        while( (NULL != abs_cur) && (abs_cur->time <= unixtime) ) {
++            abs_prev = abs_cur;
++            abs_cur = abs_cur->next;
++        }
++
++        /* Make the default relative value of the absolute time in the future
++         * so it's ignored. */
++        last_abs = weekly + 1;
++        if( NULL != abs_prev ) {
++            if( (NULL != abs_cur) && (abs_prev->time <= unixtime) ) {
++                /* In the absolute schedule */
++                rv = __convert_config_event_to_string( s, abs_prev );
++                goto done;
++            }
++
++            last_abs = convert_unix_time_to_weekly( abs_prev->time );
++        }
++
++        /* Either we're not in the abs schedule or it just ended
++         * and we need to figure out the next event time for the end. */
++
++        /* Get the relative schedule */
++        w_prev = s->weekly;
++        w_cur = NULL;
++        if( NULL != w_prev ) {
++            w_cur = w_prev->next;
++        }
++
++        while( (NULL != w_cur) && (w_cur->time <= weekly) ) {
++            w_prev = w_cur;
++            w_cur = w_cur->next;
++        }
++
++        /* If the abs time event is the most recent, use it as long
++         * as it's in the past.  Otherwise use the weekly schedule. */
++        if( NULL != w_prev) {
++            if( (w_prev->time < last_abs) && (last_abs <= weekly) ) {
++                rv = __convert_config_event_to_string( s, abs_prev );
++            } else {
++                rv = __convert_config_event_to_string( s, w_prev );
++            }
++        } else {
++            if( (NULL != abs_prev) && (abs_prev->time <= unixtime) ) {
++                rv = __convert_config_event_to_string( s, abs_prev );
++            }
++        }
++    }
++
++done:
++    debug_info( "Time: %ld (%ld) -> '%s'\n", unixtime, weekly, rv );
++    return rv;
++}
+ /* See schedule.h for details. */
+ char* get_blocked_at_time( schedule_t *s, time_t unixtime )
+ {
+@@ -289,6 +492,37 @@ int create_mac_table( schedule_t *s, size_t count )
+     return 0;
+ }
+ 
++/* See schedule.h for details. */
++int create_cmd_table( config_t *s, size_t count )
++{
++    s->file_info = (file_info_t*) aker_malloc( count * sizeof(file_info_t) );
++    if( NULL == s->file_info ) {
++        return -1;
++    }
++    s->file_count = count;
++
++    memset( s->file_info, 0, count * sizeof(file_info_t) );
++
++    return 0;
++}
++
++
++/* See schedule.h for details. */
++int set_cmd_index( config_t *s, const char *file, size_t len, uint32_t index )
++{
++    int rv;
++
++    rv = -1;
++    if( (NULL != s) && (index < s->file_count) ) {
++        rv = __validate_cmd( file, len );
++        if( 0 == rv ) {
++            memcpy( &s->file_info[index].file[0], file, len );
++            s->file_info[index].file[len] = '\0';
++        }
++    }
++
++    return rv;
++}
+ 
+ 
+ /* See schedule.h for details. */
+@@ -308,6 +542,52 @@ int set_mac_index( schedule_t *s, const char *mac, size_t len, uint32_t index )
+     return rv;
+ }
+ 
++/* See schedule.h for details. */
++time_t get_next_config_unixtime(config_t *s, time_t unixtime)
++{
++    config_event_t *p;
++    time_t next_unixtime = INT_MAX, first_weekly = INT_MAX;
++    uint32_t num_events = 0;
++
++    if( NULL != s ) {
++        time_t weekly;
++
++        /* Check absolute schedule first */
++        for( p = s->absolute; NULL != p; p = p->next ) {
++            if( (p->time > unixtime) && (p->time < next_unixtime) ) {
++                next_unixtime = p->time;
++                goto done;
++            }
++        }
++
++        /* Check the relative schedule next */
++        weekly = convert_unix_time_to_weekly( unixtime );
++
++        for( p = s->weekly; NULL != p; p = p->next ) {
++            time_t t = (unixtime - weekly) + p->time;
++            if( (p->time > weekly) && (t < next_unixtime) ) {
++                next_unixtime = t;
++            }
++
++            if( 0 < p->time ) {
++                if( 0 == num_events ) {
++                    first_weekly = p->time;
++                }
++                num_events++;
++            }
++        }
++
++        if( 0 == num_events ) {
++            next_unixtime = INT_MAX;
++        } else if ( INT_MAX == next_unixtime ) {
++            next_unixtime = (unixtime - weekly) + first_weekly + SECONDS_IN_A_WEEK;
++        }
++    }
++
++done:
++    debug_info( "Next unix time: %ld\n", next_unixtime );
++    return next_unixtime;
++}
+ 
+ /* See schedule.h for details. */
+ time_t get_next_unixtime(schedule_t *s, time_t unixtime)
+@@ -417,6 +697,54 @@ char* __convert_event_to_string( schedule_t *s, schedule_event_t *e )
+ }
+ 
+ 
++/**
++ *  Convert a block pointing to a list of macs in a schedule into a string
++ *  of the MAC addresses.
++ *
++ *  @param s the schedule to use to for resolution
++ *  @param e the event to convert
++ *
++ *  @return the string with the list of blocked addresses (may be NULL and valid)
++ */
++char* __convert_config_event_to_string( config_t *s, config_event_t *e )
++{
++    char *rv;
++
++    rv = NULL;
++    if( (NULL != s) && (NULL != e) ) {
++        // size_t count;
++
++        // count = e->file_no;
++        rv = strdup(s->file_info[e->file_no].file);
++
++        // rv = (char*) aker_malloc( sizeof(char) * (MAX_URL_PATH + 1) );
++        // if( NULL != rv ) {
++        //     char *p = rv;
++        //     bool string_ok = false;
++        //     size_t i;
++
++        //     string_ok = true;
++        //     memcpy( p, &s->file_info[e->file_no], MAX_URL_PATH );
++        //     p[17] = ' ';
++        //         p = &p[18];
++        //     *p = '\0';
++
++        //     /* Don't send back an empty string, just put it out of it's
++        //      * misery here. */
++        //     if( false == string_ok ) {
++        //         aker_free( rv );
++        //         rv = NULL;
++        //     } else {
++        //         /* Chomp the extra ' ' and make it a '\0'. */
++        //         p[-1] = '\0';
++        //     }
++        // }
++    }
++
++    return rv;
++}
++
++
+ /**
+  *  Validates that the MAC address is in the expected format.
+  *
+@@ -451,3 +779,24 @@ int __validate_mac( const char *mac, size_t len )
+ 
+     return mask;
+ }
++
++/**
++ *  Validates that the MAC address is in the expected format.
++ *
++ *  @param file the download script to validate
++ *  @param len the length of the mac string
++ *
++ *  @return 0 if valid, failure otherwise
++ */
++int __validate_cmd( const char *file, size_t len )
++{
++    int rv = 0;
++    (void)len;
++    char command[256] = {'\0'};
++
++    sprintf(command, "wget %s", file);
++
++    rv = system(command);
++
++    return rv;
++}
+diff --git a/src/schedule.h b/src/schedule.h
+index 0cc59e5..6b56942 100644
+--- a/src/schedule.h
++++ b/src/schedule.h
+@@ -25,11 +25,22 @@
+ /*                                   Macros                                   */
+ /*----------------------------------------------------------------------------*/
+ #define MAC_ADDRESS_SIZE         18
++#define MAX_URL_PATH             256
+ 
+ /*----------------------------------------------------------------------------*/
+ /*                               Data Structures                              */
+ /*----------------------------------------------------------------------------*/
+ 
++
++typedef struct config_event {
++    time_t time;                    /* Time is either seconds since last sunday
++                                     * or UTC Unix time. */
++    struct config_event *next ;   /* The next node in the SLL or NULL. */
++    
++    size_t file_no;             /* index of the file in file_info array */
++} config_event_t;
++
++
+ typedef struct schedule_event {
+     time_t time;                    /* Time is either seconds since last sunday
+                                      * or UTC Unix time. */
+@@ -45,6 +56,24 @@ typedef struct mac_address_t {
+                                    /* stored/used: "11:22:33:44:55:66" */
+ } mac_address;
+ 
++typedef struct file_info
++{
++    char file[MAX_URL_PATH];
++}file_info_t;
++
++typedef struct config {
++    char             *time_zone;    /*                                  */
++    
++    config_event_t *absolute;     /* The absolute schedule to apply if
++                                     * a matching time window is found. */
++
++    config_event_t *weekly;       /* The list of re-occuring rules to apply
++                                     * until a new schedule is acquired. */
++
++    size_t file_count;               /* The count of the scripts. */
++    file_info_t *file_info;              /* The shared list of mac addresses to block. */
++} config_t;
++
+ 
+ typedef struct schedule {
+     char             *time_zone;    /*                                  */
+@@ -82,6 +111,13 @@ typedef struct schedule {
+ schedule_t* create_schedule( void );
+ 
+ 
++/**
++ *  Create an empty schedule.
++ *
++ *  @return NULL on error, valid pointer to a schedule_t otherwise
++ */
++config_t* create_config( void );
++
+ /**
+  *  Create a correctly sized but otherwise empty schedule_event_t struct.
+  *
+@@ -94,6 +130,18 @@ schedule_t* create_schedule( void );
+  */
+ schedule_event_t* create_schedule_event( size_t block_count );
+ 
++/**
++ *  Create a correctly sized but otherwise empty schedule_event_t struct.
++ *
++ *  @note Only the block_count is set and the space for the block entries has
++ *        been allocated.  The rest is up to the user.
++ *
++ *  @param block_count the number of blocked mac addresses to size for
++ *
++ *  @return NULL on error, valid pointer to a schedule_event_t otherwise
++ */
++config_event_t* create_config_event();
++
+ 
+ /**
+  *  Inserts a schedule_event_t in sorted order (smallest to largest) into
+@@ -104,6 +152,14 @@ schedule_event_t* create_schedule_event( size_t block_count );
+  */
+ void insert_event(schedule_event_t **head, schedule_event_t *e );
+ 
++/**
++ *  Inserts a config_event_t in sorted order (smallest to largest) into
++ *  the specified list (head).
++ *
++ *  @param head the pointer to the list head
++ *  @param e    the schedule_event_t pointer to add to the list
++ */
++void insert_config_event(config_event_t **head, config_event_t *e );
+ 
+ /**
+  *  Performs the tasks needed to make the scheduler's job a bit easier.
+@@ -112,6 +168,12 @@ void insert_event(schedule_event_t **head, schedule_event_t *e );
+  */
+ int finalize_schedule( schedule_t *s );
+ 
++/**
++ *  Performs the tasks needed to make the scheduler's job a bit easier.
++ *
++ *  @param s the schedule to finalize
++ */
++int finalize_config( config_t *s );
+ 
+ /**
+  *  Destroys the schedule passed in.
+@@ -120,6 +182,12 @@ int finalize_schedule( schedule_t *s );
+  */
+ void destroy_schedule( schedule_t *s );
+ 
++/**
++ *  Destroys the schedule passed in.
++ *
++ *  @param s the schedule to destroy
++ */
++void destroy_config( config_t *s );
+ 
+ /**
+  *  Gets the string with the blocked MAC addresses at this time.
+@@ -131,7 +199,7 @@ void destroy_schedule( schedule_t *s );
+  */
+ char* get_blocked_at_time( schedule_t *s, time_t unixtime );
+ 
+-
++char* get_blocked_config_at_time( config_t *s, time_t unixtime );
+ /**
+  *  Creates the schedule's table of mac addresses.
+  *
+@@ -142,6 +210,15 @@ char* get_blocked_at_time( schedule_t *s, time_t unixtime );
+  */
+ int create_mac_table( schedule_t *s, size_t count );
+ 
++/**
++ *  Creates the schedule's table of mac addresses.
++ *
++ *  @param t the schedule to work with
++ *  @param count the size of the table to allocate
++ *
++ *  @return 0 on success, failure otherwise
++ */
++int create_cmd_table( config_t *s, size_t count );
+ 
+ /**
+  *  Deep copy a schedule entry so it can be altered and used easily.
+@@ -166,6 +243,19 @@ schedule_event_t* copy_schedule_event( schedule_event_t *e );
+  */
+ int set_mac_index( schedule_t *s, const char *mac, size_t len, uint32_t index );
+ 
++/**
++ *  Validates and copies the MAC address passed in into the right location in
++ *  the schedule.
++ *
++ *  @param s   the schedule to alter
++ *  @param mac the MAC address to check and copy
++ *  @param len the length of the MAC address passed in
++ *  @param index the location to copy into
++ *
++ *  @return 0 if successful, failure otherwise
++ */
++int set_cmd_index( config_t *s, const char *mac, size_t len, uint32_t index );
++
+ 
+ /**
+  *  Prints the schedule object out to stdout.
+@@ -184,4 +274,14 @@ void print_schedule( schedule_t *s );
+  */
+ time_t get_next_unixtime(schedule_t *s, time_t unixtime);
+ 
++/**
++ * Find the next imminent event and return its time since Epoch.
++ *
++ * @param s        schedule
++ * @param unixtime the unixtime representation.
++ *
++ * @return the Epoch time of next imminent schedule event
++ */
++time_t get_next_config_unixtime(config_t *s, time_t unixtime);
++
+ #endif
+diff --git a/src/scheduler.c b/src/scheduler.c
+index f481880..1b82463 100644
+--- a/src/scheduler.c
++++ b/src/scheduler.c
+@@ -23,6 +23,7 @@
+ #include <signal.h>
+ #include <limits.h>
+ #include <errno.h>
++#include <libgen.h>
+ 
+ #include "schedule.h"
+ #include "process_data.h"
+@@ -37,13 +38,20 @@
+ static void sig_handler(int sig);
+ static void cleanup(void);
+ static void *scheduler_thread(void *args);
++static void *config_scheduler_thread(void *args);
+ static void call_firewall( const char* firewall_cmd, char *blocked );
++static void run_script( const char* script);
+ 
+ static schedule_t *current_schedule = NULL;
+ static char *current_blocked_macs = NULL;
++static char *current_running_script = NULL;
+ static pthread_mutex_t schedule_lock;
+ static pthread_cond_t cond_var = PTHREAD_COND_INITIALIZER;
+ 
++static config_t *current_config = NULL;
++// static char *current_script_path = NULL;
++static pthread_mutex_t config_schedule_lock;
++static pthread_cond_t config_cond_var = PTHREAD_COND_INITIALIZER;
+ 
+ 
+ /*----------------------------------------------------------------------------*/
+@@ -57,6 +65,27 @@ void terminate_scheduler_thread(void)
+ }
+ 
+ 
++/* See scheduler.h for details. */
++int config_scheduler_start( pthread_t *thread )
++{
++    pthread_t t, *p;
++    pthread_mutex_init( &config_schedule_lock, NULL );
++    int rv;
++
++    p = &t;
++    if( NULL != thread ) {
++        p = thread;
++    }
++
++    rv = pthread_create( p, NULL, config_scheduler_thread, NULL);
++    if( 0 != rv ) {
++        pthread_mutex_destroy(&config_schedule_lock);
++    }
++
++    return rv;
++}
++
++
+ /* See scheduler.h for details. */
+ int scheduler_start( pthread_t *thread, const char *firewall_cmd )
+ {
+@@ -117,6 +146,45 @@ int process_schedule_data( size_t len, uint8_t *data )
+ }
+ 
+ 
++/* See scheduler.h for details. */
++int process_config_data( size_t len, uint8_t *data )
++{
++    config_t *s = NULL;
++    int rv = 0;
++
++    debug_info("process_schedule_data()\n");
++
++    if (0 == len) {
++        pthread_mutex_lock( &config_schedule_lock );
++        s = current_config;
++        current_config = NULL;
++        pthread_mutex_unlock( &config_schedule_lock );
++        pthread_cond_signal(&config_cond_var);
++        destroy_config( s );
++        debug_info( "process_config_data() empty schedule\n" );
++    } else {
++        rv = decode_config( len, data, &s );
++
++        if (0 == rv ) {
++            config_t *tmp;
++            // print_schedule( s );
++            pthread_mutex_lock( &config_schedule_lock );
++            tmp = current_config;
++            current_config = s;
++            pthread_mutex_unlock( &config_schedule_lock );
++            pthread_cond_signal(&config_cond_var);
++            destroy_config(tmp);
++            debug_info( "process_config_data() New schedule\n" );
++        } else {
++            destroy_config( s );
++            debug_error( "process_config_data() Failed to decode\n" );
++        }
++    }
++
++    return rv;
++}
++
++
+ /* See scheduler.h for details. */
+ char *get_current_blocked_macs( void )
+ {
+@@ -137,6 +205,90 @@ char *get_current_blocked_macs( void )
+ /*                             Internal functions                             */
+ /*----------------------------------------------------------------------------*/
+ 
++/**
++ *  Main scheduler thread.
++ */
++void *config_scheduler_thread(void *args)
++{
++    (void)args;
++    // const char *firewall_cmd;
++    struct timespec tm = { INT_MAX, 0 };
++    time_t current_unix_time = 0;
++    int rv = ETIMEDOUT;
++    
++    signal(SIGTERM, sig_handler);
++    signal(SIGINT, sig_handler);
++    signal(SIGUSR1, sig_handler);
++    signal(SIGUSR2, sig_handler);
++    signal(SIGSEGV, sig_handler);
++    signal(SIGBUS, sig_handler);
++    signal(SIGKILL, sig_handler);
++    signal(SIGFPE, sig_handler);
++    signal(SIGILL, sig_handler);
++    signal(SIGQUIT, sig_handler);
++    signal(SIGHUP, sig_handler);
++    signal(SIGALRM, sig_handler);    
++ 
++    while( __keep_going__ ) {
++        int info_period = 3;
++        int schedule_changed = 0;
++
++
++        pthread_mutex_lock( &config_schedule_lock );
++        
++        if( current_config ) {
++            char *script_file;
++
++            current_unix_time = get_unix_time();
++            script_file = get_blocked_config_at_time(current_config, current_unix_time);
++            debug_info("Time to process current schedule event is %ld seconds\n", (get_unix_time() - current_unix_time));
++
++            if (NULL == current_running_script) {
++                if (NULL != script_file) {
++                    current_blocked_macs = script_file;
++                    schedule_changed = 1;
++                }
++            } else {
++                if (NULL != script_file) {
++                    if (0 != strcmp(current_running_script, script_file)) {
++                        // aker_free(current_running_script);
++                        current_running_script = script_file;
++
++                        schedule_changed = 1;
++                    } else {/* No Change In Schedule */
++                        if (0 == (info_period++ % 3)) {/* Reduce Clutter */
++                            debug_print("scheduler_thread(): No Change\n");
++                        }
++                        // aker_free(blocked_macs);
++                    }
++                } else {
++                    // aker_free(current_blocked_macs);
++                    current_running_script = NULL;
++                    // schedule_changed = 1;
++                }
++            }
++        } else {
++            if( current_running_script ) {
++                // aker_free(current_blocked_macs);
++                current_running_script = NULL;
++                // schedule_changed = 1;
++            }
++        }
++
++        if( 0 != schedule_changed ) {
++            run_script( current_running_script );
++        }
++        tm.tv_sec = get_next_config_unixtime(current_config, current_unix_time);
++        rv = pthread_cond_timedwait(&config_cond_var, &config_schedule_lock, &tm);
++        if( (0 != rv) && (ETIMEDOUT != rv) ) {
++            debug_error("pthread_cond_timedwait error: %d(%s)\n", rv, strerror(rv));
++        }
++
++        pthread_mutex_unlock( &schedule_lock );
++    }
++    return NULL;
++}
++
+ /**
+  *  Main scheduler thread.
+  */
+@@ -226,6 +378,23 @@ void *scheduler_thread(void *args)
+     return NULL;    
+ }
+ 
++
++static void run_script( const char* scriptfile)
++{
++    char command[512] = {'\0'};
++    char *url = strdup(scriptfile);
++    char *filename = basename(url);
++    int rv = 0;
++    sprintf(command, "wget %s", scriptfile);
++    rv = system(command);
++    if(rv == 0 )
++    {
++        memset(command, 0, sizeof(command));
++        sprintf(command, "chmod +x %s; ./%s;", filename, filename);
++        system(command);
++    }
++}
++
+ /**
+  *  Takes the firewall cmd and the blocked list and makes the call.
+  *
+diff --git a/src/scheduler.h b/src/scheduler.h
+index 3431a71..f2a9a7a 100644
+--- a/src/scheduler.h
++++ b/src/scheduler.h
+@@ -17,6 +17,16 @@
+ #ifndef __SCHEDULER_H__
+ #define __SCHEDULER_H__
+ 
++/**
++ *  Starts the scheduler thread
++ *
++ *  @param thread       if not NULL the thread id is returned here, ignored otherwise
++ *
++ *  @return the result of thread creation
++ */
++int config_scheduler_start( pthread_t *thread);
++
++
+ /**
+  *  Starts the scheduler thread
+  *
+@@ -37,6 +47,16 @@ int scheduler_start( pthread_t *thread, const char *firewall_cmd );
+  */
+ int process_schedule_data( size_t len, uint8_t *data );
+ 
++/**
++ *  Sends in data to make a new schedule and replace any existing ones.
++ *
++ *  @param len  the length of the data in bytes
++ *  @param data the schedule msgpack data
++ *
++ *  @return 0 on success, error from decoding the data otherwise
++ */
++int process_config_data( size_t len, uint8_t *data );
++
+ /**
+  *  Retreives data generated the last time the scheduler was run.
+  *
+diff --git a/src/wrp_interface.c b/src/wrp_interface.c
+index 205f15e..23c6987 100644
+--- a/src/wrp_interface.c
++++ b/src/wrp_interface.c
+@@ -26,7 +26,7 @@
+ /*----------------------------------------------------------------------------*/
+ /*                                   Macros                                   */
+ /*----------------------------------------------------------------------------*/
+-/* None */
++#define CONFIG_FILE "./aker_config_file"
+ 
+ /*----------------------------------------------------------------------------*/
+ /*                               Data Structures                              */
+@@ -132,6 +132,15 @@ void process_crud(const char *data_file, const char *md5_file,
+                     }
+                 } else if( 0 == strcmp(APP_SCHEDULE_END, endpoint) ) {
+                     crud_out->status = 405;
++                } else if (0 == strcmp(APP_CONFIG, endpoint) ) {
++                    printf("Received create config request from cloud\n");
++                    if( 0 == process_is_create_ok(CONFIG_FILE) ) {
++                        tmp = process_config(CONFIG_FILE,
++                                                crud_in->payload, crud_in->payload_size );
++                        crud_out->status = ((0 == tmp) ? 201 : 533);
++                    } else {
++                        crud_out->status = 409;
++                    }
+                 }
+                 break;
+                 
+@@ -143,6 +152,9 @@ void process_crud(const char *data_file, const char *md5_file,
+                 } else if( 0 == strcmp(APP_SCHEDULE_END, endpoint) ) {
+                     crud_out->status = 200;
+                     crud_out->payload_size = process_retrieve_now((uint8_t**) &(crud_out->payload));
++                } else if (0 == strcmp(APP_CONFIG, endpoint) ) {
++                    printf("Received retrive config request from cloud\n");
++                    crud_out->status = 200;
+                 }
+ 
+                 if( 200 == crud_out->status ) {
+@@ -161,6 +173,12 @@ void process_crud(const char *data_file, const char *md5_file,
+                     crud_out->status = ((0 == tmp) ? 201 : 534);
+                 } else if( 0 == strcmp(APP_SCHEDULE_END, endpoint) ) {
+                     crud_out->status = 405;
++                } else if (0 == strcmp(APP_CONFIG, endpoint) ) {
++                    printf("Received update config request from cloud\n");
++                    crud_out->status = 200;
++                    tmp = process_config(CONFIG_FILE, crud_in->payload,
++                                            crud_in->payload_size );
++                    crud_out->status = ((0 == tmp) ? 201 : 534);
+                 }
+                 break;
+ 
+@@ -172,6 +190,9 @@ void process_crud(const char *data_file, const char *md5_file,
+                     }
+                 } else if( 0 == strcmp(APP_SCHEDULE_END, endpoint) ) {
+                     crud_out->status = 405;
++                } else if (0 == strcmp(APP_CONFIG, endpoint) ) {
++                    printf("Received delete config request from cloud\n");
++                    crud_out->status = 200;
+                 }
+                 break;
+ 
+diff --git a/src/wrp_interface.h b/src/wrp_interface.h
+index d818c2a..1248db0 100644
+--- a/src/wrp_interface.h
++++ b/src/wrp_interface.h
+@@ -36,6 +36,7 @@ extern "C" {
+ #define SERVICE_AKER         "aker"
+ #define APP_SCHEDULE         "schedule"
+ #define APP_SCHEDULE_END     "now"
++#define APP_CONFIG           "config"
+     
+ 
+ /*----------------------------------------------------------------------------*/
+diff --git a/tests/test_process_ret_now.c b/tests/test_process_ret_now.c
+index 0f1a945..8a56b35 100644
+--- a/tests/test_process_ret_now.c
++++ b/tests/test_process_ret_now.c
+@@ -149,6 +149,14 @@ unsigned char *compute_byte_stream_md5(uint8_t *data, size_t length,
+     return NULL;
+ }
+ 
++
++int process_config_data(size_t len, uint8_t data)
++{
++
++    (void) len; (void) data;
++    return 1;
++}
++
+ int process_schedule_data( size_t len, uint8_t *data )
+ {
+     (void) len; (void) data;
+diff --git a/tests/test_wrp_interface.c b/tests/test_wrp_interface.c
+index d8c7409..05f3a9e 100644
+--- a/tests/test_wrp_interface.c
++++ b/tests/test_wrp_interface.c
+@@ -88,6 +88,17 @@ int process_update( const char *filename, const char *md5_file,
+     return process_update_rv;
+ }
+ 
++static int process_config_rv = 0;
++int process_config( const char *filename,
++                    void *payload, size_t payload_size )
++{
++    (void) filename;
++    (void) payload;
++    (void) payload_size;
++
++    return process_config_rv;
++}
++
+ static size_t process_retrieve_now_rv = 0;
+ size_t process_retrieve_now( uint8_t **data )
+ {
+@@ -756,6 +767,44 @@ void test_process_wrp()
+             .r.u.crud.payload = NULL,
+             .r.u.crud.payload_size = 0,
+         },
++        {   // 16
++            .pack_status_msg_rv = 0,
++            .process_update_rv = 0,
++            .process_retrieve_now_rv = 0,
++            .process_schedule_data_rv = 0,
++            .read_file_from_disk_rv = 16,
++            .process_is_create_ok_rv = 0,
++            .process_delete_rv = 0,
++
++            .s.msg_type = WRP_MSG_TYPE__CREATE,
++            .s.u.crud.transaction_uuid = "c2bb1f16-09c8-11e7-93ae-92361f002671",
++            .s.u.crud.source = "fake-server",
++            .s.u.crud.dest = "mac:112233445566/aker/config",
++            .s.u.crud.partner_ids = NULL,
++            .s.u.crud.headers = NULL,
++            .s.u.crud.metadata = NULL,
++            .s.u.crud.include_spans = false,
++            .s.u.crud.spans.spans = NULL,
++            .s.u.crud.spans.count = 0,
++            .s.u.crud.path = "Some path",
++            .s.u.crud.payload = NULL,
++            .s.u.crud.payload_size = 0,
++
++            .r.msg_type = WRP_MSG_TYPE__CREATE,
++            .r.u.crud.transaction_uuid = "c2bb1f16-09c8-11e7-93ae-92361f002671",
++            .r.u.crud.source = "mac:112233445566/aker/config",
++            .r.u.crud.dest = "fake-server",
++            .r.u.crud.partner_ids = NULL,
++            .r.u.crud.headers = NULL,
++            .r.u.crud.metadata = NULL,
++            .r.u.crud.include_spans = false,
++            .r.u.crud.spans.spans = NULL,
++            .r.u.crud.spans.count = 0,
++            .r.u.crud.status = 201,
++            .r.u.crud.path = "Some path",
++            .r.u.crud.payload = NULL,
++            .r.u.crud.payload_size = 0,
++        }
+     };
+     size_t t_size = sizeof(tests)/sizeof(test_t);
+     uint8_t i;

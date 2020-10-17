@@ -64,6 +64,56 @@ int process_is_create_ok( const char *filename )
 }
 
 /* See process_data.h for details. */
+int process_config( const char *filename,
+                    void *payload, size_t payload_size )
+{
+    int rv;
+    unsigned char result[MD5_SIZE];
+    unsigned char *md5_string = NULL;
+    time_t process_time;
+
+    process_time = get_unix_time();
+    rv = 0;
+
+    md5_string = compute_byte_stream_md5(payload, payload_size, result);
+    if( (NULL != md5_string) && (0 < payload_size) ) {
+        if( 0 == process_config_data(payload_size, payload) ) {
+            FILE *fh = NULL;
+
+            fh = fopen(filename, "wb");
+            if( fh ) {
+                debug_print("payload_size = %d\n", payload_size);
+                if( payload_size == fwrite(payload, sizeof(uint8_t), payload_size, fh) ) {
+                    rv += 1;
+                } else {
+                    debug_error("Create/Update - failed to write %s\n", filename);
+                }
+                fclose(fh);
+            } else {
+                debug_error("Create/Update - failed on fopen(%s, \"wb\"\n", filename);
+            }
+        } else {
+            debug_error("Create/Update - process data failed\n");
+            rv = -2;
+        }
+    } else {
+        debug_error("Create/Update - compute_byte_stream_md5() failed\n");
+        rv = -3;
+    }
+
+    if( NULL != md5_string ) {
+        aker_free(md5_string);
+    }
+
+    process_time = get_unix_time() - process_time;
+    debug_info("Time to process schedule file of size %zu bytes is %ld seconds\n", 
+                                    ((0 < rv) ? rv : 0), process_time);
+
+    return rv;
+
+}
+
+/* See process_data.h for details. */
 int process_update( const char *filename, const char *md5, 
                         void *payload, size_t payload_size )
 {

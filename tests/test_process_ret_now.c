@@ -149,6 +149,14 @@ unsigned char *compute_byte_stream_md5(uint8_t *data, size_t length,
     return NULL;
 }
 
+
+int process_config_data(size_t len, uint8_t data)
+{
+
+    (void) len; (void) data;
+    return 1;
+}
+
 int process_schedule_data( size_t len, uint8_t *data )
 {
     (void) len; (void) data;

@@ -92,6 +92,7 @@ int main( int argc, char **argv)
     int opt_index = 0;
     int rv = 0;
     pthread_t thread_id;
+    pthread_t config_thread;
 
     signal(SIGTERM, sig_handler);
     signal(SIGINT, sig_handler);
@@ -158,6 +159,8 @@ int main( int argc, char **argv)
         (NULL != md5_file) )
     {
         scheduler_start( &thread_id, firewall_cmd );
+
+        config_scheduler_start( &config_thread);
 
         import_existing_schedule( data_file, md5_file );
         
