@@ -236,18 +236,20 @@ static void sig_handler(int sig)
 
 static void import_existing_schedule( const char *data_file, const char *md5_file )
 {
-    size_t len;
-    uint8_t *data = NULL;
+    (void)data_file;
+    (void)md5_file;
+    // size_t len;
+    // uint8_t *data = NULL;
 
-    if (0 != verify_md5_signatures(data_file, md5_file)) {
-        debug_error("import_existing_schedule() data or md5 corruption\n");
-    }
+    // if (0 != verify_md5_signatures(data_file, md5_file)) {
+    //     debug_error("import_existing_schedule() data or md5 corruption\n");
+    // }
 
-    len = read_file_from_disk( data_file, &data );
-    if( 0 < len ) {
-        process_schedule_data( len, data );
-        aker_free( data );
-    }
+    // len = read_file_from_disk( data_file, &data );
+    // if( 0 < len ) {
+    //     process_schedule_data( len, data );
+    //     aker_free( data );
+    // }
 }
 
 

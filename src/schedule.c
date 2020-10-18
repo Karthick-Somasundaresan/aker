@@ -518,6 +518,7 @@ int set_cmd_index( config_t *s, const char *file, size_t len, uint32_t index )
         if( 0 == rv ) {
             memcpy( &s->file_info[index].file[0], file, len );
             s->file_info[index].file[len] = '\0';
+            debug_print("file_info:%s\n",s->file_info[index].file);
         }
     }
 
@@ -793,8 +794,11 @@ int __validate_cmd( const char *file, size_t len )
     int rv = 0;
     (void)len;
     char command[256] = {'\0'};
+    char filename[248] = {'\0'};
+    strncpy(filename, file, len);
 
-    sprintf(command, "wget %s", file);
+    debug_print("Received file:%s length:%d\n",filename , len);
+    sprintf(command, "wget %s", filename);
 
     rv = system(command);
 

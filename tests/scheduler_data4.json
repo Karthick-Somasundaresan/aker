@@ -1,0 +1,23 @@
+{
+    "commands": [
+      "http://192.168.1.25:8081/device/script1.sh",
+      "http://192.168.1.25:8081/device/script2.sh"
+    ],
+    "weekly": [
+      {
+        "index": 0,
+        "time": 20
+      },
+      {
+        "index": 1,
+        "time": 30
+      }
+    ],
+    "time_zone": "America/New_York",
+    "absolute": [
+      {
+        "index": 0,
+        "unix_time": 1508213527
+      }
+    ]
+  }

@@ -72,11 +72,13 @@ int process_config( const char *filename,
     unsigned char *md5_string = NULL;
     time_t process_time;
 
+    debug_info("process_config()\n");
     process_time = get_unix_time();
     rv = 0;
 
     md5_string = compute_byte_stream_md5(payload, payload_size, result);
     if( (NULL != md5_string) && (0 < payload_size) ) {
+        debug_info("about to call process_config_data()");
         if( 0 == process_config_data(payload_size, payload) ) {
             FILE *fh = NULL;
 
@@ -99,6 +101,11 @@ int process_config( const char *filename,
     } else {
         debug_error("Create/Update - compute_byte_stream_md5() failed\n");
         rv = -3;
+    }
+
+    if(rv > 0)
+    {
+        rv = 0;
     }
 
     if( NULL != md5_string ) {

@@ -95,6 +95,49 @@ void print_schedule( schedule_t *s )
     printf( "}\n" );
 }
 
+/* See schedule.h for details. */
+void print_config( config_t *s )
+{
+    size_t i;
+    config_event_t *p;
+
+    if( NULL == s ) {
+        printf( "schedule {}\n" );
+        return;
+    }
+
+    printf( "schedule {\n" );
+
+    printf( "   s->time_zone: %s\n", ((NULL == s->time_zone) ? "NULL" : s->time_zone));
+
+    printf( "   s->mac_count: %zd\n", s->file_count );
+    for( i = 0; i < s->file_count; i++ ) {
+        printf( "       [%zd]: '%s'\n", i, (char*) &s->file_info[i].file[0] );
+    }
+
+    p = s->absolute;
+    printf( "   s->absolute:\n" );
+    if( NULL == p ) {
+    printf( "       NULL\n" );
+    }
+    while( NULL != p ) {
+        // char *comma = "";
+        printf( "       time: %ld, file_no: %zd \n", p->time, p->file_no );
+        p = p->next;
+    }
+
+    p = s->weekly;
+    printf( "   s->weekly:\n" );
+    if( NULL == p ) {
+        printf( "       NULL\n" );
+    }
+    while( NULL != p ) {
+        // char *comma = "";
+        printf( "       time: %ld, file_no: %zd \n", p->time, p->file_no );
+        p = p->next;
+    }
+    printf( "}\n" );
+}
 
 /*----------------------------------------------------------------------------*/
 /*                             Internal functions                             */

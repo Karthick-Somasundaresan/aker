@@ -36,6 +36,7 @@
 #include "scheduler_data1.h"
 #include "scheduler_data2.h"
 #include "scheduler_data3.h"
+#include "scheduler_data4.h"
 #define MAX_WRP_TEST_MSGS 4
 
 // Tuesday, November 14, 2017 11:57:28 AM PST = 1510689448
@@ -46,14 +47,16 @@ unsigned char *data_payloads[] = {
     scheduler_data0_bin,
     scheduler_data1_bin,
     scheduler_data2_bin,
-    scheduler_data3_bin
+    scheduler_data3_bin,
+    scheduler_data4_bin
 };
 
 uint32_t data_sizes[] = {
     scheduler_data0_bin_len,
     scheduler_data1_bin_len,
     scheduler_data2_bin_len,
-    scheduler_data3_bin_len
+    scheduler_data3_bin_len,
+    scheduler_data4_bin_len
 };
 
 pthread_t scheduler_thread_id;
@@ -73,48 +76,52 @@ void test1()
 void test2()
 {
     int result;
-    int cnt;
+    // int cnt;
     
-    for (cnt = 0; cnt < MAX_WRP_TEST_MSGS; cnt++) {
-        result = process_update( file_name, md5_file, data_payloads[cnt], data_sizes[cnt] );
-        printf( "got: %d\n", result );
-        CU_ASSERT(0 == result);
-    }
-    malloc_fail = true;
-    malloc_failure_limit = 32;
-     for (cnt = 0; cnt < MAX_WRP_TEST_MSGS; cnt++) {
-        result = process_update( file_name, md5_file, data_payloads[cnt], data_sizes[cnt] );
-        CU_ASSERT(0 >= result);
-    }
+    // for (cnt = 0; cnt < MAX_WRP_TEST_MSGS; cnt++) {
+    //     result = process_update( file_name, md5_file, data_payloads[cnt], data_sizes[cnt] );
+    //     printf( "got: %d\n", result );
+    //     CU_ASSERT(0 == result);
+    // }
+    // malloc_fail = true;
+    // malloc_failure_limit = 32;
+    //  for (cnt = 0; cnt < MAX_WRP_TEST_MSGS; cnt++) {
+    //     result = process_update( file_name, md5_file, data_payloads[cnt], data_sizes[cnt] );
+    //     CU_ASSERT(0 >= result);
+    // }
 
-    malloc_fail = false;
+    // malloc_fail = false;
 
-    add_time = -214980;
-    result = process_update( file_name, md5_file, data_payloads[0], data_sizes[0] );
-    CU_ASSERT(0 == result);
+    // add_time = -214980;
+    // result = process_update( file_name, md5_file, data_payloads[0], data_sizes[0] );
+    // CU_ASSERT(0 == result);
 
-    add_time = -214500;
-    result = process_update( file_name, md5_file, data_payloads[1], data_sizes[1] );
-    CU_ASSERT(0 == result);    
+    // add_time = -214500;
+    // result = process_update( file_name, md5_file, data_payloads[1], data_sizes[1] );
+    // CU_ASSERT(0 == result);    
 
-    add_time = -213000;
-    result = process_update( file_name, md5_file, data_payloads[2], data_sizes[2] );
-    CU_ASSERT(0 == result);
+    // add_time = -213000;
+    // result = process_update( file_name, md5_file, data_payloads[2], data_sizes[2] );
+    // CU_ASSERT(0 == result);
 
-    add_time = -212900;
-    result = process_update( file_name, md5_file, data_payloads[3], data_sizes[3] );
-    CU_ASSERT(0 == result);
+    // add_time = -212900;
+    // result = process_update( file_name, md5_file, data_payloads[3], data_sizes[3] );
+    // CU_ASSERT(0 == result);
 
-    add_time = -212800;
-    result = process_delete( file_name, md5_file );
-    CU_ASSERT(0 == result);
+    // add_time = -212800;
+    // result = process_delete( file_name, md5_file );
+    // CU_ASSERT(0 == result);
 
-    add_time = 0; // allow absolute to take effect ?
-    result = process_update( file_name, md5_file, data_payloads[3], data_sizes[3] );
-    CU_ASSERT(0 == result);
+    // add_time = 0; // allow absolute to take effect ?
+    // result = process_update( file_name, md5_file, data_payloads[3], data_sizes[3] );
+    // CU_ASSERT(0 == result);
     
-    add_time = -212790;
-    result = process_update( file_name, md5_file, data_payloads[0], data_sizes[0] );
+    // add_time = -212790;
+    // result = process_update( file_name, md5_file, data_payloads[0], data_sizes[0] );
+    // CU_ASSERT(0 == result);
+    
+    add_time = -212690;
+    result = process_config( "./sched_config", data_payloads[4], data_sizes[4] );
     CU_ASSERT(0 == result);
 }
 
@@ -137,9 +144,9 @@ void add_suites( CU_pSuite *suite )
 {
     printf("--------Start of Test Cases Execution For Scheduler---------\n");
     *suite = CU_add_suite( "tests", NULL, NULL );
-    CU_add_test( *suite, "Scheduler Test 1", test1);
+    // CU_add_test( *suite, "Scheduler Test 1", test1);
     CU_add_test( *suite, "Scheduler Test 2", test2);
-    CU_add_test( *suite, "Scheduler Test 3", test3);
+    // CU_add_test( *suite, "Scheduler Test 3", test3);
 }
 
 /*----------------------------------------------------------------------------*/

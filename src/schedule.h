@@ -264,6 +264,15 @@ int set_cmd_index( config_t *s, const char *mac, size_t len, uint32_t index );
  */
 void print_schedule( schedule_t *s );
 
+
+/**
+ *  Prints the config object out to stdout.
+ *
+ *  @param s the config to print
+ */
+void print_config( config_t *s );
+
+
 /**
  * Find the next imminent event and return its time since Epoch.
  *

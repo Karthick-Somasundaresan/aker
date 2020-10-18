@@ -177,6 +177,7 @@ int decode_config(size_t len, uint8_t * buf, config_t **t)
     }
     
     debug_print("decode_config - calling create_config\n");
+    debug_info("decode_config - calling create_config\n");
     s = create_config();
     *t = s; 
     
@@ -185,6 +186,7 @@ int decode_config(size_t len, uint8_t * buf, config_t **t)
     }
     
     debug_print("decode_config - msgpack_unpacked_init\n");
+    debug_info("decode_config - msgpack_unpacked_init\n");
     msgpack_unpacked_init(&result);
     ret = msgpack_unpack_next(&result, (char *) buf, len, &off);
     
@@ -204,6 +206,7 @@ int decode_config(size_t len, uint8_t * buf, config_t **t)
             int size = map->size;
             msgpack_object *key = &p->key;
             msgpack_object *val = &p->val;
+            debug_print("Incoming Key:%s\n size:%d", key->via.str.ptr, key->via.str.size);
             
             while (size-- > 0) {
                 if (0 == strncmp(key->via.str.ptr, WEEKLY_SCHEDULE, key->via.str.size)) {
@@ -309,6 +312,7 @@ int decode_cmds_table (msgpack_object *key, msgpack_object *val, config_t **t)
     
     count = val->via.array.size;
     
+    debug_print("Command array count:%d\n", count); 
     if (0 == count) {
         debug_error("decode_cmds_table(): empty CMD array\n");        
         return -1;
@@ -319,9 +323,9 @@ int decode_cmds_table (msgpack_object *key, msgpack_object *val, config_t **t)
         debug_error("decode_cmds_table(): create_mac_table() failed\n");
         return -2;
     }
-    
     for (i =0; i < count;i++) {
-        if (ptr->via.str.size < MAC_ADDRESS_SIZE) {
+        debug_print("String: %s size:%d max url len:%d\n", ptr->via.str.ptr, ptr->via.str.size, MAX_URL_PATH);
+        if (ptr->via.str.size < MAX_URL_PATH) {
             if (0 != set_cmd_index( *t, ptr->via.str.ptr, ptr->via.str.size, i )) {
                 debug_error("decode_cmds_table(): Invalid scriptfile address\n");
                 return -3;

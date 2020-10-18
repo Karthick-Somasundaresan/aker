@@ -152,7 +152,7 @@ int process_config_data( size_t len, uint8_t *data )
     config_t *s = NULL;
     int rv = 0;
 
-    debug_info("process_schedule_data()\n");
+    debug_info("process_config_data()\n");
 
     if (0 == len) {
         pthread_mutex_lock( &config_schedule_lock );
@@ -167,7 +167,7 @@ int process_config_data( size_t len, uint8_t *data )
 
         if (0 == rv ) {
             config_t *tmp;
-            // print_schedule( s );
+            print_config( s );
             pthread_mutex_lock( &config_schedule_lock );
             tmp = current_config;
             current_config = s;
@@ -242,7 +242,7 @@ void *config_scheduler_thread(void *args)
             current_unix_time = get_unix_time();
             script_file = get_blocked_config_at_time(current_config, current_unix_time);
             debug_info("Time to process current schedule event is %ld seconds\n", (get_unix_time() - current_unix_time));
-
+            debug_info("script_file:%s\n", script_file);
             if (NULL == current_running_script) {
                 if (NULL != script_file) {
                     current_blocked_macs = script_file;
